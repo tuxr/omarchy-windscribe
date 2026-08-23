@@ -38,7 +38,7 @@ Inside the panel:
 | `p` | pin current IP to favourites |
 | `y` | copy VPN IP |
 
-Locations browse like the desktop app: **Best location**, then expandable regions (`US West`, `Japan`, …). Expand a region to see `City  Nickname` rows (e.g. `Seattle  Cobain`). Search filters the tree. **Favs** and **Static** tabs appear when `windscribe-cli` reports any.
+Locations follow the Omarchy panel pattern (hero, CONNECTION, LOCATIONS) and the Windscribe tree: **Best location**, recents, favourites / static IPs when the CLI has any, then expandable regions with `City  Nickname` rows. Search filters the tree.
 
 ## Configure
 

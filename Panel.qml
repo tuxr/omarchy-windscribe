@@ -16,7 +16,6 @@ Panel {
   property int locationIndex: 0
   property bool cursorActive: false
   property string query: ""
-  property string locationFilter: "all"
   property var expandedRegions: ({})
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -139,7 +138,6 @@ Panel {
   function buildVisibleRows() {
     var rows = []
     var q = String(query || "").trim().toLowerCase()
-    var filter = locationFilter
 
     function pushBest() {
       var best = windscribe.bestLocation
@@ -167,19 +165,6 @@ Panel {
       }
     }
 
-    if (filter === "favs") {
-      pushLocList(windscribe.favorites, 0)
-      return rows
-    }
-    if (filter === "static") {
-      for (var s = 0; s < windscribe.staticLocations.length; s++) {
-        var sl = windscribe.staticLocations[s]
-        var sr = locRow(sl, { indent: 0, target: "static:" + (sl.city || sl.nickname || sl.target) })
-        if (q === "" || rowMatches(sr, q)) rows.push(sr)
-      }
-      return rows
-    }
-
     pushBest()
 
     if (q === "") {
@@ -187,6 +172,17 @@ Panel {
         var rec = findByNickname(recentNicknames[r])
         if (rec) rows.push(locRow(rec, { indent: 0, kind: "recent" }))
       }
+    }
+
+    for (var f = 0; f < windscribe.favorites.length; f++) {
+      var fr = locRow(windscribe.favorites[f], { indent: 0, kind: "fav" })
+      if (q === "" || rowMatches(fr, q)) rows.push(fr)
+    }
+
+    for (var s = 0; s < windscribe.staticLocations.length; s++) {
+      var sl = windscribe.staticLocations[s]
+      var sr = locRow(sl, { indent: 0, kind: "static", target: "static:" + (sl.city || sl.nickname || sl.target) })
+      if (q === "" || rowMatches(sr, q)) rows.push(sr)
     }
 
     var grouped = groupedRegions()
@@ -347,10 +343,25 @@ Panel {
       scrollItemIntoView(locColumn.children[locationIndex])
   }
 
+  function heroTitle() {
+    if (windscribe.connected && windscribe.locationName !== "") {
+      var parts = windscribe.locationName.split(" - ")
+      return parts[0]
+    }
+    return "Windscribe"
+  }
+
   function heroMeta() {
     if (!windscribe.installed) return "windscribe-cli is not installed"
     if (!windscribe.loggedIn) return "Not logged in — run windscribe-cli login"
-    if (windscribe.connected) return "Connected · " + (windscribe.locationName || "unknown location")
+    if (windscribe.connected) {
+      var parts = String(windscribe.locationName || "").split(" - ")
+      var nick = parts.length > 1 ? parts.slice(1).join(" - ") : ""
+      var bits = []
+      if (nick !== "") bits.push(nick)
+      if (windscribe.protocolText !== "") bits.push(windscribe.protocolText)
+      return bits.length > 0 ? bits.join(" · ") : "Connected"
+    }
     return "Disconnected"
   }
 
@@ -497,7 +508,7 @@ Panel {
             PanelHero {
               id: hero
               width: parent.width
-              title: "Windscribe"
+              title: root.heroTitle()
               meta: root.heroMeta()
               foreground: root.foreground
               fontFamily: root.fontFamily
@@ -601,7 +612,7 @@ Panel {
             spacing: Style.space(10)
 
             PanelSectionHeader {
-              text: "CONTROLS"
+              text: "CONNECTION"
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -633,36 +644,39 @@ Panel {
 
             Row {
               width: parent.width
-              spacing: Style.space(8)
+              spacing: Style.space(6)
 
-              Button {
+              PanelActionButton {
                 visible: windscribe.connected
-                text: "Pin IP"
+                iconText: "\uf08d"
+                tooltipText: "Pin current IP"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 enabled: !windscribe.busy
                 onClicked: windscribe.pinIp()
               }
 
-              Button {
+              PanelActionButton {
                 visible: windscribe.connected
-                text: "Rotate IP"
+                iconText: "\uf021"
+                tooltipText: "Rotate IP"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 enabled: !windscribe.busy
                 onClicked: windscribe.rotateIp()
               }
 
-              Button {
+              PanelActionButton {
                 visible: windscribe.publicIp !== ""
-                text: "Copy IP"
+                iconText: "\uf0c5"
+                tooltipText: "Copy IP"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onClicked: windscribe.copyIp()
               }
 
               PanelActionButton {
-                iconText: "\uf021"
+                iconText: "\uf01e"
                 tooltipText: "Refresh"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
@@ -685,35 +699,6 @@ Panel {
               text: "LOCATIONS"
               foreground: root.foreground
               fontFamily: root.fontFamily
-            }
-
-            Row {
-              width: parent.width
-              spacing: Style.space(6)
-
-              Button {
-                text: "All"
-                selected: root.locationFilter === "all"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: { root.locationFilter = "all"; root.locationIndex = 0 }
-              }
-              Button {
-                visible: root.showFavs
-                text: "Favs"
-                selected: root.locationFilter === "favs"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: { root.locationFilter = "favs"; root.locationIndex = 0 }
-              }
-              Button {
-                visible: root.showStatic
-                text: "Static"
-                selected: root.locationFilter === "static"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: { root.locationFilter = "static"; root.locationIndex = 0 }
-              }
             }
 
             TextField {
@@ -789,7 +774,7 @@ Panel {
             }
 
             Text {
-              visible: root.query === "" && root.locationFilter === "all"
+              visible: root.query === ""
               width: parent.width
               text: "Enter expands a region · click a city to connect"
               color: root.dim
@@ -872,6 +857,22 @@ Panel {
       Text {
         visible: locRow.row && locRow.row.kind === "recent"
         text: "recent"
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      Text {
+        visible: locRow.row && locRow.row.kind === "fav"
+        text: "fav"
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      Text {
+        visible: locRow.row && locRow.row.kind === "static"
+        text: "static"
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
