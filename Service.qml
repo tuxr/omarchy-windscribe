@@ -20,6 +20,7 @@ Item {
   property bool firewallOn: false
   property var locations: []
   property var favorites: []
+  property var staticLocations: []
   property var bestLocation: null
   property string lastError: ""
   property string actionStatus: ""
@@ -37,6 +38,8 @@ Item {
 
   property var _queue: []
   property string _kind: ""
+  property var _job: null
+  property int _retries: 0
   property bool _wantLists: false
 
   function setting(name, fallback) {
@@ -71,6 +74,7 @@ Item {
   function pump() {
     if (cli.running || _queue.length === 0) return
     var job = _queue.shift()
+    _job = job
     _kind = job.kind
     cli.command = job.args
     cli.running = true
@@ -96,8 +100,8 @@ Item {
 
   function refreshLocations() {
     if (!installed || !loggedIn) return
-    enqueue(["windscribe-cli", "locations"], "locations")
-    enqueue(["windscribe-cli", "locations", "fav"], "fav")
+    _wantLists = true
+    enqueue(["windscribe-cli", "status"], "status")
   }
 
   function toggle() {
@@ -112,9 +116,13 @@ Item {
     if (t === "") t = "best"
     _desired = 1
     lastError = ""
-    actionStatus = t === "best" ? "Connecting to best location…" : ("Connecting to " + t + "…")
-    var cmd = ["windscribe-cli", "connect", t]
-    if (protocolSetting !== "") cmd.push(protocolSetting)
+    actionStatus = t === "best" ? "Connecting to best location…" : ("Connecting to " + t.replace(/^static:/, "") + "…")
+    var cmd
+    if (t.indexOf("static:") === 0)
+      cmd = ["windscribe-cli", "connect", "static", t.slice(7)]
+    else
+      cmd = ["windscribe-cli", "connect", t]
+    if (protocolSetting !== "" && t.indexOf("static:") !== 0) cmd.push(protocolSetting)
     enqueue(cmd, "action")
   }
 
@@ -145,6 +153,13 @@ Item {
     Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(publicIp) + " | wl-copy"])
     actionStatus = "Copied " + publicIp
     statusClear.restart()
+  }
+
+  function pinIp() {
+    if (!installed || !loggedIn || !connected) return
+    lastError = ""
+    actionStatus = "Pinning current IP…"
+    enqueue(["windscribe-cli", "ip", "fav"], "action")
   }
 
   function parseStatus(raw) {
@@ -246,9 +261,21 @@ Item {
     var failed = exitCode !== 0
     var msg = String(err || out || "").trim()
     if (failed && /already running/i.test(msg)) {
-      retryTimer.restart()
+      if (_retries < 3 && _job) {
+        _retries += 1
+        _queue = [_job].concat(_queue)
+        retryTimer.restart()
+      } else {
+        _retries = 0
+        if (kind === "action") {
+          _desired = -1
+          actionStatus = ""
+          lastError = "Windscribe CLI was busy. Try again."
+        }
+      }
       return
     }
+    _retries = 0
 
     if (kind === "which") {
       installed = exitCode === 0
@@ -272,6 +299,7 @@ Item {
         _wantLists = false
         enqueue(["windscribe-cli", "locations"], "locations")
         enqueue(["windscribe-cli", "locations", "fav"], "fav")
+        enqueue(["windscribe-cli", "locations", "static"], "static")
       } else {
         _wantLists = false
       }
@@ -292,6 +320,12 @@ Item {
     if (kind === "fav") {
       if (failed) return
       favorites = parseLocationList(out, false).locations
+      return
+    }
+
+    if (kind === "static") {
+      if (failed) return
+      staticLocations = parseLocationList(out, false).locations
       return
     }
 
@@ -323,9 +357,15 @@ Item {
     repeat: false
     onTriggered: {
       if (cli.running) {
+        var kind = root._kind
         cli.running = false
+        if (kind === "action") {
+          root._desired = -1
+          root.actionStatus = ""
+        }
         root.lastError = "windscribe-cli timed out"
         root._kind = ""
+        root._job = null
         Qt.callLater(root.pump)
       }
     }
@@ -335,7 +375,7 @@ Item {
     id: retryTimer
     interval: 2000
     repeat: false
-    onTriggered: root.refresh()
+    onTriggered: root.pump()
   }
 
   Timer {

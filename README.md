@@ -28,15 +28,17 @@ Inside the panel:
 | Key | Action |
 | --- | --- |
 | `j` / `k` or arrows | move cursor |
-| Enter / Space | activate current row |
-| `/` or `s` | focus location search |
+| Enter / Space | expand a region, or connect a city |
+| `h` / `l` or left/right | collapse / expand region |
+| `/` or `s` | focus location search (type normally, including j/k) |
 | `t` or `c` | toggle VPN |
 | `r` | refresh |
 | `f` | toggle firewall |
 | `i` | rotate IP (while connected) |
+| `p` | pin current IP to favourites |
 | `y` | copy VPN IP |
 
-Search filters the full location list. With an empty query the list shows best location, recents, favorites, and the current city.
+Locations browse like the desktop app: **Best location**, then expandable regions (`US West`, `Japan`, …). Expand a region to see `City  Nickname` rows (e.g. `Seattle  Cobain`). Search filters the tree. **Favs** and **Static** tabs appear when `windscribe-cli` reports any.
 
 ## Configure
 
@@ -49,6 +51,7 @@ omarchy-shell io.github.dsumpter.windscribe status
 omarchy-shell io.github.dsumpter.windscribe connectBest
 omarchy-shell io.github.dsumpter.windscribe disconnect
 omarchy-shell io.github.dsumpter.windscribe rotateIp
+omarchy-shell io.github.dsumpter.windscribe pinIp
 omarchy-shell io.github.dsumpter.windscribe refresh
 omarchy-shell io.github.dsumpter.windscribe open
 omarchy-shell io.github.dsumpter.windscribe close

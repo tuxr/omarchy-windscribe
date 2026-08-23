@@ -16,6 +16,8 @@ Panel {
   property int locationIndex: 0
   property bool cursorActive: false
   property string query: ""
+  property string locationFilter: "all"
+  property var expandedRegions: ({})
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -26,8 +28,10 @@ Panel {
   readonly property string toggleHint: windscribe.connected ? "Disconnect VPN" : "Connect to best location"
   readonly property bool headerHasCursor: cursorActive && focusSection === "header" && windscribe.installed
   readonly property var recentNicknames: settings.recentLocations instanceof Array ? settings.recentLocations : []
-  readonly property var visibleLocations: buildVisibleLocations()
+  readonly property var visibleRows: buildVisibleRows()
   readonly property bool showControls: windscribe.installed && windscribe.loggedIn
+  readonly property bool showStatic: windscribe.staticLocations.length > 0
+  readonly property bool showFavs: windscribe.favorites.length > 0
   readonly property var protocolOptions: [
     { value: "Auto", label: "Auto" },
     { value: "WireGuard", label: "WireGuard" },
@@ -40,21 +44,30 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  function matchesLoc(loc, q) {
-    if (!loc || q === "") return true
-    var hay = [loc.title, loc.subtitle, loc.city, loc.region, loc.nickname, loc.full].join(" ").toLowerCase()
-    return hay.indexOf(q) !== -1
-  }
-
   function isCurrent(loc) {
     if (!loc || !windscribe.connected || windscribe.locationName === "") return false
     var name = windscribe.locationName.toLowerCase()
     var nick = String(loc.nickname || "").toLowerCase()
     var city = String(loc.city || "").toLowerCase()
-    if (nick !== "" && name.indexOf(nick) !== -1) {
+    if (nick !== "" && (name === nick || name.endsWith(" - " + nick))) {
       if (city === "" || name.indexOf(city) !== -1) return true
     }
     return name === (city + " - " + nick)
+  }
+
+  function isRegionCurrent(region) {
+    if (!windscribe.connected) return false
+    for (var i = 0; i < windscribe.locations.length; i++) {
+      if (windscribe.locations[i].region === region && isCurrent(windscribe.locations[i]))
+        return true
+    }
+    return false
+  }
+
+  function rowMatches(row, q) {
+    if (!row || q === "") return true
+    var hay = [row.title, row.subtitle, row.target, row.region].join(" ").toLowerCase()
+    return hay.indexOf(q) !== -1
   }
 
   function findByNickname(nick) {
@@ -69,48 +82,161 @@ Panel {
     return null
   }
 
-  function buildVisibleLocations() {
-    var out = []
-    var seen = {}
-    var q = String(query || "").trim().toLowerCase()
-
-    function pushLoc(loc) {
-      if (!loc) return
-      var key = String(loc.target || loc.nickname || loc.full || "").toLowerCase()
-      if (key !== "" && seen[key]) return
-      if (q !== "" && !matchesLoc(loc, q)) return
-      out.push(loc)
-      if (key) seen[key] = true
-    }
-
-    pushLoc(windscribe.bestLocation)
-
-    if (q === "") {
-      for (var r = 0; r < recentNicknames.length && r < 5; r++)
-        pushLoc(findByNickname(recentNicknames[r]))
-      var current = null
-      for (var c = 0; c < windscribe.locations.length; c++) {
-        if (isCurrent(windscribe.locations[c])) { current = windscribe.locations[c]; break }
+  function groupedRegions() {
+    var order = []
+    var map = {}
+    for (var i = 0; i < windscribe.locations.length; i++) {
+      var loc = windscribe.locations[i]
+      var region = String(loc.region || "Other")
+      if (!map[region]) {
+        map[region] = []
+        order.push(region)
       }
-      pushLoc(current)
-      for (var f = 0; f < windscribe.favorites.length; f++)
-        pushLoc(windscribe.favorites[f])
-    } else {
-      for (var i = 0; i < windscribe.locations.length && out.length < 40; i++)
-        pushLoc(windscribe.locations[i])
+      map[region].push(loc)
     }
-    return out
+    return { order: order, map: map }
   }
 
-  function selectedLocation() {
-    if (visibleLocations.length === 0) return null
-    return visibleLocations[Math.max(0, Math.min(locationIndex, visibleLocations.length - 1))]
+  function locRow(loc, extra) {
+    var row = {
+      kind: "loc",
+      title: loc.city !== "" ? (loc.city + (loc.nickname !== "" && loc.nickname !== loc.city ? "  " + loc.nickname : "")) : (loc.title || loc.nickname),
+      subtitle: loc.speed !== "" ? loc.speed : (loc.region || ""),
+      target: loc.target || loc.nickname,
+      region: loc.region || "",
+      loc: loc,
+      indent: 1,
+      expandable: false,
+      expanded: false,
+      connected: isCurrent(loc)
+    }
+    if (extra) {
+      for (var k in extra) row[k] = extra[k]
+    }
+    return row
+  }
+
+  function toggleRegion(name) {
+    var next = {}
+    for (var k in expandedRegions) next[k] = expandedRegions[k]
+    next[name] = !next[name]
+    expandedRegions = next
+  }
+
+  function expandCurrentRegion() {
+    if (!windscribe.connected) return
+    for (var i = 0; i < windscribe.locations.length; i++) {
+      if (isCurrent(windscribe.locations[i]) && windscribe.locations[i].region) {
+        var next = {}
+        for (var k in expandedRegions) next[k] = expandedRegions[k]
+        next[windscribe.locations[i].region] = true
+        expandedRegions = next
+        return
+      }
+    }
+  }
+
+  function buildVisibleRows() {
+    var rows = []
+    var q = String(query || "").trim().toLowerCase()
+    var filter = locationFilter
+
+    function pushBest() {
+      var best = windscribe.bestLocation
+      if (!best) return
+      if (q !== "" && !rowMatches({ title: best.title, subtitle: best.subtitle, target: best.target }, q)) return
+      rows.push({
+        kind: "best",
+        title: "Best location",
+        subtitle: best.subtitle || best.nickname,
+        target: "best",
+        region: "",
+        loc: best,
+        indent: 0,
+        expandable: false,
+        expanded: false,
+        connected: isCurrent(best)
+      })
+    }
+
+    function pushLocList(list, indent) {
+      for (var i = 0; i < list.length; i++) {
+        var loc = list[i]
+        var row = locRow(loc, { indent: indent || 0 })
+        if (q === "" || rowMatches(row, q)) rows.push(row)
+      }
+    }
+
+    if (filter === "favs") {
+      pushLocList(windscribe.favorites, 0)
+      return rows
+    }
+    if (filter === "static") {
+      for (var s = 0; s < windscribe.staticLocations.length; s++) {
+        var sl = windscribe.staticLocations[s]
+        var sr = locRow(sl, { indent: 0, target: "static:" + (sl.city || sl.nickname || sl.target) })
+        if (q === "" || rowMatches(sr, q)) rows.push(sr)
+      }
+      return rows
+    }
+
+    pushBest()
+
+    if (q === "") {
+      for (var r = 0; r < recentNicknames.length && r < 5; r++) {
+        var rec = findByNickname(recentNicknames[r])
+        if (rec) rows.push(locRow(rec, { indent: 0, kind: "recent" }))
+      }
+    }
+
+    var grouped = groupedRegions()
+    for (var g = 0; g < grouped.order.length; g++) {
+      var region = grouped.order[g]
+      var members = grouped.map[region]
+      var expanded = expandedRegions[region] === true || q !== ""
+      var regionRow = {
+        kind: "region",
+        title: region,
+        subtitle: members.length + (members.length === 1 ? " city" : " cities"),
+        target: region,
+        region: region,
+        loc: null,
+        indent: 0,
+        expandable: true,
+        expanded: expanded,
+        connected: isRegionCurrent(region)
+      }
+      if (q === "") {
+        rows.push(regionRow)
+        if (expanded) {
+          for (var m = 0; m < members.length; m++)
+            rows.push(locRow(members[m], { indent: 1 }))
+        }
+      } else {
+        var matched = []
+        for (var n = 0; n < members.length; n++) {
+          var cand = locRow(members[n], { indent: 1 })
+          if (rowMatches(cand, q) || region.toLowerCase().indexOf(q) !== -1)
+            matched.push(cand)
+        }
+        if (matched.length > 0) {
+          rows.push(regionRow)
+          for (var p = 0; p < matched.length; p++) rows.push(matched[p])
+        }
+      }
+    }
+    return rows
+  }
+
+  function selectedRow() {
+    if (visibleRows.length === 0) return null
+    return visibleRows[Math.max(0, Math.min(locationIndex, visibleRows.length - 1))]
   }
 
   function ensureCursor() {
-    if (locationIndex >= visibleLocations.length) locationIndex = Math.max(0, visibleLocations.length - 1)
+    if (locationIndex >= visibleRows.length) locationIndex = Math.max(0, visibleRows.length - 1)
     if (locationIndex < 0) locationIndex = 0
-    if (focusSection === "locations" && visibleLocations.length === 0) focusSection = "header"
+    if (focusSection === "locations" && visibleRows.length === 0) focusSection = "header"
     if (focusSection === "firewall" && !showControls) focusSection = "header"
     if (focusSection === "protocol" && !showControls) focusSection = "header"
   }
@@ -132,12 +258,12 @@ Panel {
       else focusSection = "protocol"
     } else if (focusSection === "protocol") {
       if (dy < 0) focusSection = "firewall"
-      else if (visibleLocations.length > 0) { focusSection = "locations"; locationIndex = 0 }
+      else if (visibleRows.length > 0) { focusSection = "locations"; locationIndex = 0 }
     } else if (focusSection === "locations") {
       if (dy < 0) {
         if (locationIndex <= 0) focusSection = showControls ? "protocol" : "header"
         else locationIndex--
-      } else if (locationIndex < visibleLocations.length - 1) {
+      } else if (locationIndex < visibleRows.length - 1) {
         locationIndex++
       }
     }
@@ -150,13 +276,29 @@ Panel {
     if (focusSection === "header") windscribe.toggle()
     else if (focusSection === "firewall") windscribe.setFirewall(!windscribe.firewallOn)
     else if (focusSection === "protocol") protoDrop.toggle()
-    else if (focusSection === "locations") connectLocation(selectedLocation())
+    else if (focusSection === "locations") activateLocation(selectedRow())
+  }
+
+  function activateLocation(row) {
+    if (!row || windscribe.busy) return
+    if (row.kind === "region") {
+      if (!row.expanded) {
+        toggleRegion(row.region)
+        return
+      }
+      windscribe.connectTo(row.target)
+      return
+    }
+    persistRecent(row.loc)
+    var target = String(row.target || "")
+    if (target.indexOf("static:") === 0)
+      windscribe.connectTo(target)
+    else
+      windscribe.connectTo(target || "best")
   }
 
   function connectLocation(loc) {
-    if (!loc || windscribe.busy) return
-    persistRecent(loc)
-    windscribe.connectTo(loc.target || loc.nickname || "best")
+    activateLocation(loc && loc.target ? loc : locRow(loc, { indent: 0 }))
   }
 
   function persistRecent(loc) {
@@ -227,6 +369,7 @@ Panel {
     locationIndex = 0
     if (panelFlick) panelFlick.contentY = 0
     windscribe.refreshAll()
+    expandCurrentRegion()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
   onLocationIndexChanged: scrollCursorIntoView()
@@ -247,6 +390,7 @@ Panel {
     function connectBest(): string { windscribe.connectTo("best"); return "ok" }
     function disconnect(): string { windscribe.disconnectVpn(); return "ok" }
     function rotateIp(): string { windscribe.rotateIp(); return "ok" }
+    function pinIp(): string { windscribe.pinIp(); return "ok" }
     function status(): string {
       return windscribe.connected
         ? ("Connected: " + windscribe.locationName)
@@ -319,6 +463,11 @@ Panel {
           windscribe.rotateIp()
         } else if (t === "y" || t === "Y") {
           windscribe.copyIp()
+        } else if (t === "p" || t === "P") {
+          windscribe.pinIp()
+        } else if (t === "l" || t === "L" || t === "h" || t === "H") {
+          var row = root.selectedRow()
+          if (row && row.kind === "region") root.toggleRegion(row.region)
         }
       }
 
@@ -488,6 +637,15 @@ Panel {
 
               Button {
                 visible: windscribe.connected
+                text: "Pin IP"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                enabled: !windscribe.busy
+                onClicked: windscribe.pinIp()
+              }
+
+              Button {
+                visible: windscribe.connected
                 text: "Rotate IP"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
@@ -529,6 +687,35 @@ Panel {
               fontFamily: root.fontFamily
             }
 
+            Row {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Button {
+                text: "All"
+                selected: root.locationFilter === "all"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: { root.locationFilter = "all"; root.locationIndex = 0 }
+              }
+              Button {
+                visible: root.showFavs
+                text: "Favs"
+                selected: root.locationFilter === "favs"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: { root.locationFilter = "favs"; root.locationIndex = 0 }
+              }
+              Button {
+                visible: root.showStatic
+                text: "Static"
+                selected: root.locationFilter === "static"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: { root.locationFilter = "static"; root.locationIndex = 0 }
+              }
+            }
+
             TextField {
               id: searchField
               width: parent.width
@@ -542,16 +729,24 @@ Panel {
                 root.locationIndex = 0
                 root.focusSection = "locations"
               }
-              onAccepted: root.connectLocation(root.selectedLocation())
+              onAccepted: root.activateLocation(root.selectedRow())
               Keys.onPressed: function(event) {
-                if (event.key === Qt.Key_Down || event.text === "j") {
+                if (event.key === Qt.Key_Down) {
                   root.moveCursor(0, 1)
                   event.accepted = true
                   return
                 }
-                if (event.key === Qt.Key_Up || event.text === "k") {
+                if (event.key === Qt.Key_Up) {
                   root.moveCursor(0, -1)
                   event.accepted = true
+                  return
+                }
+                if (event.key === Qt.Key_Right || event.key === Qt.Key_Left) {
+                  var row = root.selectedRow()
+                  if (row && row.kind === "region") {
+                    root.toggleRegion(row.region)
+                    event.accepted = true
+                  }
                   return
                 }
                 if (event.key === Qt.Key_Escape) {
@@ -567,7 +762,7 @@ Panel {
             }
 
             Text {
-              visible: root.visibleLocations.length === 0
+              visible: root.visibleRows.length === 0
               width: parent.width
               text: root.query !== "" ? "No locations match that search." : "Loading locations…"
               color: root.dim
@@ -582,21 +777,21 @@ Panel {
               spacing: Style.space(6)
 
               Repeater {
-                model: root.visibleLocations
+                model: root.visibleRows
                 LocationRow {
                   required property var modelData
                   required property int index
                   width: locColumn.width
-                  loc: modelData
+                  row: modelData
                   rowIndex: index
                 }
               }
             }
 
             Text {
-              visible: root.query === "" && windscribe.locationCount > root.visibleLocations.length
+              visible: root.query === "" && root.locationFilter === "all"
               width: parent.width
-              text: "Type to search the full list."
+              text: "Enter expands a region · click a city to connect"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -610,9 +805,10 @@ Panel {
 
   component LocationRow: CursorSurface {
     id: locRow
-    property var loc: null
+    property var row: null
     property int rowIndex: 0
-    readonly property bool isConnected: root.isCurrent(loc)
+    readonly property bool isConnected: row ? row.connected === true : false
+    readonly property int indentPx: row && row.indent ? Style.space(16) * row.indent : 0
 
     hasCursor: root.cursorActive && root.focusSection === "locations" && root.locationIndex === rowIndex
     current: locRow.isConnected
@@ -628,14 +824,14 @@ Panel {
         root.focusSection = "locations"
         root.locationIndex = locRow.rowIndex
       }
-      onClicked: root.connectLocation(locRow.loc)
+      onClicked: root.activateLocation(locRow.row)
     }
 
     RowLayout {
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
-      anchors.leftMargin: Style.space(10)
+      anchors.leftMargin: Style.space(10) + locRow.indentPx
       anchors.rightMargin: Style.space(8)
       spacing: Style.space(8)
 
@@ -646,17 +842,18 @@ Panel {
 
         Text {
           Layout.fillWidth: true
-          text: locRow.loc ? String(locRow.loc.title || locRow.loc.full || "") : ""
+          text: locRow.row ? String(locRow.row.title || "") : ""
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
+          font.bold: locRow.row && locRow.row.kind === "region"
           elide: Text.ElideRight
         }
 
         Text {
           Layout.fillWidth: true
-          visible: locRow.loc && String(locRow.loc.subtitle || "") !== ""
-          text: locRow.loc ? String(locRow.loc.subtitle || "") : ""
+          visible: locRow.row && String(locRow.row.subtitle || "") !== ""
+          text: locRow.row ? String(locRow.row.subtitle || "") : ""
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -665,8 +862,16 @@ Panel {
       }
 
       Text {
-        visible: locRow.loc && locRow.loc.isBest === true
+        visible: locRow.row && locRow.row.kind === "best"
         text: "best"
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      Text {
+        visible: locRow.row && locRow.row.kind === "recent"
+        text: "recent"
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -678,6 +883,15 @@ Panel {
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
+      }
+
+      PanelActionButton {
+        visible: locRow.row && locRow.row.expandable === true
+        iconText: locRow.row && locRow.row.expanded ? "\uf078" : "\uf054"
+        tooltipText: locRow.row && locRow.row.expanded ? "Collapse" : "Expand"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onClicked: if (locRow.row) root.toggleRegion(locRow.row.region)
       }
     }
   }
