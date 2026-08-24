@@ -545,6 +545,7 @@ Panel {
             width: parent.width
             visible: windscribe.installed && windscribe.loggedIn && root.detailLine() !== ""
             text: root.detailLine()
+            textFormat: Text.PlainText
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -555,6 +556,7 @@ Panel {
             visible: windscribe.actionStatus !== "" || windscribe.lastError !== ""
             width: parent.width
             text: windscribe.lastError !== "" ? windscribe.lastError : windscribe.actionStatus
+            textFormat: Text.PlainText
             color: windscribe.lastError !== "" ? root.urgent : root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -750,6 +752,7 @@ Panel {
               visible: root.visibleRows.length === 0
               width: parent.width
               text: root.query !== "" ? "No locations match that search." : "Loading locations…"
+              textFormat: Text.PlainText
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -828,6 +831,7 @@ Panel {
         Text {
           Layout.fillWidth: true
           text: locRow.row ? String(locRow.row.title || "") : ""
+          textFormat: Text.PlainText
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
@@ -839,6 +843,7 @@ Panel {
           Layout.fillWidth: true
           visible: locRow.row && String(locRow.row.subtitle || "") !== ""
           text: locRow.row ? String(locRow.row.subtitle || "") : ""
+          textFormat: Text.PlainText
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

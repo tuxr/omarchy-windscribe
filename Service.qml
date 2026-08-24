@@ -35,6 +35,9 @@ Item {
   readonly property string protocolSetting: normalizeProtocol(setting("defaultProtocol", "Auto"))
   readonly property bool busy: cli.running
   readonly property int locationCount: locations.length
+  readonly property int cliDeadlineSec: 20
+  readonly property int maxFieldChars: 240
+  readonly property int maxLocations: 400
 
   property var _queue: []
   property string _kind: ""
@@ -65,6 +68,28 @@ Item {
     return ""
   }
 
+  function pluginFile(rel) {
+    var url = Qt.resolvedUrl(rel).toString()
+    if (url.indexOf("file://") === 0)
+      url = decodeURIComponent(url.slice(7))
+    return url
+  }
+
+  function boundedCommand(args) {
+    return [pluginFile("scripts/run-bounded.py")].concat(args)
+  }
+
+  // CLI strings can land in QML Text (default AutoText). Strip markup and
+  // cap length before any UI property sees them.
+  function clipText(value, max) {
+    var limit = max || maxFieldChars
+    var text = String(value || "")
+    text = text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+    text = text.replace(/[<>]/g, "")
+    if (text.length > limit) text = text.slice(0, limit)
+    return text
+  }
+
   function enqueue(args, kind) {
     if (!args || args.length === 0) return
     _queue.push({ args: args, kind: kind || "action" })
@@ -76,7 +101,7 @@ Item {
     var job = _queue.shift()
     _job = job
     _kind = job.kind
-    cli.command = job.args
+    cli.command = boundedCommand(job.args)
     cli.running = true
     watchdog.restart()
   }
@@ -172,18 +197,18 @@ Item {
     dataUsage = ""
 
     var stateMatch = text.match(/Connect state:\s*(.+)/)
-    connectState = stateMatch ? stateMatch[1].trim() : "Unknown"
+    connectState = clipText(stateMatch ? stateMatch[1].trim() : "Unknown")
 
     var usageMatch = text.match(/Data usage:\s*(.+)/)
-    if (usageMatch) dataUsage = usageMatch[1].trim()
+    if (usageMatch) dataUsage = clipText(usageMatch[1].trim(), 80)
 
     if (connectState.indexOf("Connected") === 0) {
       var locMatch = connectState.match(/Connected:\s*(.+)$/)
-      locationName = locMatch ? locMatch[1].trim() : ""
+      locationName = locMatch ? clipText(locMatch[1].trim()) : ""
       var protoMatch = text.match(/Protocol:\s*(.+)/)
-      if (protoMatch) protocolText = protoMatch[1].trim()
+      if (protoMatch) protocolText = clipText(protoMatch[1].trim(), 80)
       var vpnIpMatch = text.match(/VPN IP:\s*(\S+)/)
-      if (vpnIpMatch) publicIp = vpnIpMatch[1]
+      if (vpnIpMatch) publicIp = clipText(vpnIpMatch[1], 80)
     }
 
     var real = connectState.indexOf("Connected") === 0
@@ -204,15 +229,15 @@ Item {
     if (isBest || /^Best Location/i.test(parts[0] || "")) {
       nickname = parts.length > 1 ? parts[parts.length - 1] : ""
       return {
-        full: label,
+        full: clipText(label),
         region: "",
         city: "",
-        nickname: nickname,
-        speed: speed,
+        nickname: clipText(nickname, 80),
+        speed: clipText(speed, 40),
         target: "best",
         isBest: true,
         title: "Best location",
-        subtitle: nickname !== "" ? (nickname + (speed !== "" ? " · " + speed : "")) : speed
+        subtitle: clipText(nickname !== "" ? (nickname + (speed !== "" ? " · " + speed : "")) : speed)
       }
     }
     if (parts.length >= 3) {
@@ -231,15 +256,15 @@ Item {
     if (nickname !== "" && nickname !== title) bits.push(nickname)
     if (speed !== "") bits.push(speed)
     return {
-      full: label,
-      region: region,
-      city: city,
-      nickname: nickname,
-      speed: speed,
-      target: nickname !== "" ? nickname : (city !== "" ? city : label),
+      full: clipText(label),
+      region: clipText(region, 80),
+      city: clipText(city, 80),
+      nickname: clipText(nickname, 80),
+      speed: clipText(speed, 40),
+      target: clipText(nickname !== "" ? nickname : (city !== "" ? city : label), 80),
       isBest: false,
-      title: title,
-      subtitle: bits.join(" · ")
+      title: clipText(title, 80),
+      subtitle: clipText(bits.join(" · "))
     }
   }
 
@@ -252,14 +277,23 @@ Item {
       var loc = parseLocationLine(lines[i], isBestLine)
       if (!loc) continue
       if (loc.isBest) best = loc
-      else result.push(loc)
+      else if (result.length < maxLocations) result.push(loc)
     }
     return { locations: result, best: best }
   }
 
   function handleExit(exitCode, out, err, kind) {
     var failed = exitCode !== 0
-    var msg = String(err || out || "").trim()
+    var timedOut = exitCode === 124
+    var msg = clipText(String(err || out || "").trim())
+    if (timedOut) {
+      if (kind === "action") {
+        _desired = -1
+        actionStatus = ""
+      }
+      lastError = "windscribe-cli timed out"
+      return
+    }
     if (failed && /already running/i.test(msg)) {
       if (_retries < 3 && _job) {
         _retries += 1
@@ -353,7 +387,7 @@ Item {
 
   Timer {
     id: watchdog
-    interval: 25000
+    interval: (root.cliDeadlineSec + 2) * 1000
     repeat: false
     onTriggered: {
       if (cli.running) {
