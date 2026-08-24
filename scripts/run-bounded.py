@@ -5,10 +5,12 @@ Quickshell StdioCollector is unbounded. Caps must be applied while reading so
 a hung or chatty windscribe-cli cannot grow this wrapper or the shell.
 
 The child is started in its own session so timeout/overflow can SIGKILL the
-whole process group, including grandchildren.
+whole process group, including grandchildren. Pipe reads are non-blocking so
+a dead group leader cannot stall the deadline behind an inherited pipe.
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import select
 import signal
@@ -45,6 +47,12 @@ def _kill(proc: subprocess.Popen[bytes]) -> None:
         pass
 
 
+def _set_nonblocking(stream) -> None:
+    fd = stream.fileno()
+    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+
 def _take(buf: bytearray, chunk: bytes, limit: int) -> bool:
     room = limit - len(buf)
     if room > 0:
@@ -65,6 +73,8 @@ def main() -> int:
     )
     assert proc.stdout is not None
     assert proc.stderr is not None
+    _set_nonblocking(proc.stdout)
+    _set_nonblocking(proc.stderr)
 
     out_buf = bytearray()
     err_buf = bytearray()
@@ -89,14 +99,11 @@ def main() -> int:
                 watch.append(proc.stderr)
             ready, _, _ = select.select(watch, [], [], min(0.2, remaining))
 
-            if not ready:
-                if proc.poll() is not None:
-                    ready = watch
-                else:
-                    continue
-
             for stream in ready:
-                chunk = os.read(stream.fileno(), READ_CHUNK)
+                try:
+                    chunk = os.read(stream.fileno(), READ_CHUNK)
+                except BlockingIOError:
+                    continue
                 if not chunk:
                     if stream is proc.stdout:
                         out_open = False
