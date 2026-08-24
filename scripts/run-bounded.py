@@ -3,11 +3,15 @@
 
 Quickshell StdioCollector is unbounded. Caps must be applied while reading so
 a hung or chatty windscribe-cli cannot grow this wrapper or the shell.
+
+The child is started in its own session so timeout/overflow can SIGKILL the
+whole process group, including grandchildren.
 """
 from __future__ import annotations
 
 import os
 import select
+import signal
 import subprocess
 import sys
 import time
@@ -19,13 +23,26 @@ READ_CHUNK = 8192
 
 
 def _kill(proc: subprocess.Popen[bytes]) -> None:
-    if proc.poll() is not None:
-        return
-    proc.kill()
+    # start_new_session makes the child the group leader (pgid == pid).
+    # Kill the group even if the leader already exited so grandchildren die.
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        if proc.poll() is None:
+            proc.kill()
+    except ProcessLookupError:
+        pass
     try:
         proc.wait(timeout=2)
     except subprocess.TimeoutExpired:
-        proc.wait()
+        try:
+            proc.wait()
+        except ProcessLookupError:
+            pass
+    except ProcessLookupError:
+        pass
 
 
 def _take(buf: bytearray, chunk: bytes, limit: int) -> bool:
@@ -44,6 +61,7 @@ def main() -> int:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         bufsize=0,
+        start_new_session=True,
     )
     assert proc.stdout is not None
     assert proc.stderr is not None
@@ -73,7 +91,6 @@ def main() -> int:
 
             if not ready:
                 if proc.poll() is not None:
-                    # Child exited; one last non-blocking drain.
                     ready = watch
                 else:
                     continue
@@ -95,8 +112,7 @@ def main() -> int:
                 _kill(proc)
                 break
     finally:
-        if proc.poll() is None:
-            _kill(proc)
+        _kill(proc)
 
     sys.stdout.buffer.write(out_buf)
     sys.stderr.buffer.write(err_buf)
@@ -105,7 +121,10 @@ def main() -> int:
         return 124
     if overflow:
         return 1
-    return int(proc.wait())
+    rc = proc.poll()
+    if rc is None:
+        return int(proc.wait())
+    return int(rc)
 
 
 if __name__ == "__main__":
