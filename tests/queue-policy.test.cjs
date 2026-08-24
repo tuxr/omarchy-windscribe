@@ -65,6 +65,19 @@ test("a full queue admits safety-relevant state by evicting refresh first", () =
   assert.equal(result.queue.at(-1).kind, "disconnect")
 })
 
+test("a full impulse queue rejects state without evicting accepted work", () => {
+  const policy = loadPolicy()
+  const queue = []
+  for (let i = 0; i < 8; i++) queue.push(job(`rotate-${i}`, "impulse"))
+  const result = policy.offer(queue, job("disconnect", "state", "connection"))
+  assert.equal(result.accepted, false)
+  assert.equal(result.coalesced, false)
+  assert.deepEqual(
+    Array.from(result.queue, item => item.kind),
+    Array.from(queue, item => item.kind)
+  )
+})
+
 test("retry goes to the front without exceeding the cap", () => {
   const policy = loadPolicy()
   let queue = [job("status", "refresh", "status")]
@@ -74,6 +87,17 @@ test("retry goes to the front without exceeding the cap", () => {
   assert.equal(result.queue.length, 8)
   assert.equal(result.queue[0].kind, "running-job")
   assert.equal(result.queue.some(item => item.kind === "status"), false)
+})
+
+test("a keyed retry is superseded by newer queued work with the same key", () => {
+  const policy = loadPolicy()
+  const newer = job("disconnect", "state", "connection")
+  const queue = [job("status", "refresh", "status"), newer]
+  const result = policy.requeueFront(queue, job("connect-a", "state", "connection"))
+  assert.equal(result.accepted, true)
+  assert.equal(result.coalesced, true)
+  assert.equal(result.dropped, null)
+  assert.deepEqual(Array.from(result.queue, item => item.kind), ["status", "disconnect"])
 })
 
 test("policy exposes the fixed public queue bound", () => {

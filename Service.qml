@@ -317,7 +317,9 @@ Item {
         _retries += 1
         var retry = QueuePolicy.requeueFront(_queue, _job)
         _queue = retry.queue
-        if (retry.accepted) {
+        if (retry.coalesced) {
+          _retries = 0
+        } else if (retry.accepted) {
           retryTimer.restart()
         } else {
           _retries = 0

@@ -18,9 +18,7 @@ function lastIndexByPolicy(queue, policy) {
 }
 
 function evictionIndex(queue) {
-  var index = lastIndexByPolicy(queue, "refresh")
-  if (index !== -1) return index
-  return lastIndexByPolicy(queue, "impulse")
+  return lastIndexByPolicy(queue, "refresh")
 }
 
 function offer(queue, job) {
@@ -52,6 +50,9 @@ function offer(queue, job) {
 
 function requeueFront(queue, job) {
   var next = queue.slice(0)
+  if (indexByKey(next, job.key) !== -1) {
+    return { accepted: true, coalesced: true, queue: next, dropped: null }
+  }
   var dropped = null
   if (next.length >= MAX_QUEUED_JOBS) {
     var victim = evictionIndex(next)
