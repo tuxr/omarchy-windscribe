@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import "QueuePolicy.js" as QueuePolicy
 
 // All windscribe-cli calls go through one Process. The binary is single-
 // instance: a second spawn exits 1 with "already running".
@@ -40,6 +41,8 @@ Item {
   readonly property int maxLocations: 400
 
   property var _queue: []
+  readonly property int queuedJobs: _queue.length
+  readonly property int maxQueuedJobs: QueuePolicy.MAX_QUEUED_JOBS
   property string _kind: ""
   property var _job: null
   property int _retries: 0
@@ -90,10 +93,27 @@ Item {
     return text
   }
 
-  function enqueue(args, kind) {
-    if (!args || args.length === 0) return
-    _queue.push({ args: args, kind: kind || "action" })
+  function enqueue(args, kind, key, policy) {
+    if (!args || args.length === 0) return "unavailable"
+    var job = {
+      args: args,
+      kind: kind || "action",
+      key: key || "",
+      policy: policy || "impulse"
+    }
+    var result = QueuePolicy.offer(_queue, job)
+    _queue = result.queue
+    if (!result.accepted) return "busy"
     pump()
+    return result.coalesced ? "coalesced" : "ok"
+  }
+
+  function rejectUserAction(result) {
+    if (result !== "busy") return result
+    _desired = -1
+    actionStatus = ""
+    lastError = "Windscribe request queue is full. Try again."
+    return result
   }
 
   function pump() {
@@ -108,35 +128,33 @@ Item {
 
   function refresh() {
     if (!installed) {
-      enqueue(["which", "windscribe-cli"], "which")
-      return
+      return enqueue(["which", "windscribe-cli"], "which", "which", "refresh")
     }
-    enqueue(["windscribe-cli", "status"], "status")
+    return enqueue(["windscribe-cli", "status"], "status", "status", "refresh")
   }
 
   function refreshAll() {
     if (!installed) {
-      enqueue(["which", "windscribe-cli"], "which")
-      return
+      return enqueue(["which", "windscribe-cli"], "which", "which", "refresh")
     }
     _wantLists = true
-    enqueue(["windscribe-cli", "status"], "status")
+    return enqueue(["windscribe-cli", "status"], "status", "status", "refresh")
   }
 
   function refreshLocations() {
-    if (!installed || !loggedIn) return
+    if (!installed || !loggedIn) return "unavailable"
     _wantLists = true
-    enqueue(["windscribe-cli", "status"], "status")
+    return enqueue(["windscribe-cli", "status"], "status", "status", "refresh")
   }
 
   function toggle() {
-    if (!installed || !loggedIn) return
-    if (connected) disconnectVpn()
-    else connectTo("best")
+    if (!installed || !loggedIn) return "unavailable"
+    if (connected) return disconnectVpn()
+    return connectTo("best")
   }
 
   function connectTo(target) {
-    if (!installed || !loggedIn) return
+    if (!installed || !loggedIn) return "unavailable"
     var t = String(target || "best").trim()
     if (t === "") t = "best"
     _desired = 1
@@ -148,29 +166,29 @@ Item {
     else
       cmd = ["windscribe-cli", "connect", t]
     if (protocolSetting !== "" && t.indexOf("static:") !== 0) cmd.push(protocolSetting)
-    enqueue(cmd, "action")
+    return rejectUserAction(enqueue(cmd, "action", "connection", "state"))
   }
 
   function disconnectVpn() {
-    if (!installed) return
+    if (!installed) return "unavailable"
     _desired = 0
     lastError = ""
     actionStatus = "Disconnecting…"
-    enqueue(["windscribe-cli", "disconnect"], "action")
+    return rejectUserAction(enqueue(["windscribe-cli", "disconnect"], "action", "connection", "state"))
   }
 
   function setFirewall(on) {
-    if (!installed || !loggedIn) return
+    if (!installed || !loggedIn) return "unavailable"
     lastError = ""
     actionStatus = on ? "Enabling firewall…" : "Disabling firewall…"
-    enqueue(["windscribe-cli", "firewall", on ? "on" : "off"], "action")
+    return rejectUserAction(enqueue(["windscribe-cli", "firewall", on ? "on" : "off"], "action", "firewall", "state"))
   }
 
   function rotateIp() {
-    if (!installed || !loggedIn || !connected) return
+    if (!installed || !loggedIn || !connected) return "unavailable"
     lastError = ""
     actionStatus = "Rotating IP…"
-    enqueue(["windscribe-cli", "ip", "rotate"], "action")
+    return rejectUserAction(enqueue(["windscribe-cli", "ip", "rotate"], "action", "", "impulse"))
   }
 
   function copyIp() {
@@ -181,10 +199,10 @@ Item {
   }
 
   function pinIp() {
-    if (!installed || !loggedIn || !connected) return
+    if (!installed || !loggedIn || !connected) return "unavailable"
     lastError = ""
     actionStatus = "Pinning current IP…"
-    enqueue(["windscribe-cli", "ip", "fav"], "action")
+    return rejectUserAction(enqueue(["windscribe-cli", "ip", "fav"], "action", "", "impulse"))
   }
 
   function parseStatus(raw) {
@@ -297,8 +315,16 @@ Item {
     if (failed && /already running/i.test(msg)) {
       if (_retries < 3 && _job) {
         _retries += 1
-        _queue = [_job].concat(_queue)
-        retryTimer.restart()
+        var retry = QueuePolicy.requeueFront(_queue, _job)
+        _queue = retry.queue
+        if (retry.accepted) {
+          retryTimer.restart()
+        } else {
+          _retries = 0
+          _desired = -1
+          actionStatus = ""
+          lastError = "Windscribe CLI was busy. Try again."
+        }
       } else {
         _retries = 0
         if (kind === "action") {
@@ -315,7 +341,7 @@ Item {
       installed = exitCode === 0
       if (installed) {
         lastError = ""
-        enqueue(["windscribe-cli", "status"], "status")
+        enqueue(["windscribe-cli", "status"], "status", "status", "refresh")
       } else {
         lastError = "windscribe-cli not found in PATH"
       }
@@ -331,9 +357,9 @@ Item {
       parseStatus(out)
       if (loggedIn && (_wantLists || locations.length === 0)) {
         _wantLists = false
-        enqueue(["windscribe-cli", "locations"], "locations")
-        enqueue(["windscribe-cli", "locations", "fav"], "fav")
-        enqueue(["windscribe-cli", "locations", "static"], "static")
+        enqueue(["windscribe-cli", "locations"], "locations", "locations", "refresh")
+        enqueue(["windscribe-cli", "locations", "fav"], "fav", "fav", "refresh")
+        enqueue(["windscribe-cli", "locations", "static"], "static", "static", "refresh")
       } else {
         _wantLists = false
       }
@@ -368,12 +394,12 @@ Item {
       _desired = -1
       actionStatus = ""
       lastError = msg || "command failed"
-      enqueue(["windscribe-cli", "status"], "status")
+      enqueue(["windscribe-cli", "status"], "status", "status", "refresh")
       return
     }
     lastError = ""
     actionStatus = ""
-    enqueue(["windscribe-cli", "status"], "status")
+    enqueue(["windscribe-cli", "status"], "status", "status", "refresh")
   }
 
   Timer {

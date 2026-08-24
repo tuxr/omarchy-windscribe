@@ -75,3 +75,21 @@ test("retry goes to the front without exceeding the cap", () => {
   assert.equal(result.queue[0].kind, "running-job")
   assert.equal(result.queue.some(item => item.kind === "status"), false)
 })
+
+test("policy exposes the fixed public queue bound", () => {
+  const policy = loadPolicy()
+  assert.equal(policy.MAX_QUEUED_JOBS, 8)
+})
+
+test("distinct read keys coalesce independently", () => {
+  const policy = loadPolicy()
+  let queue = []
+  for (const key of ["which", "status", "locations", "fav", "static"])
+    queue = policy.offer(queue, job(key, "refresh", key)).queue
+  for (const key of ["which", "status", "locations", "fav", "static"])
+    queue = policy.offer(queue, job(`${key}-duplicate`, "refresh", key)).queue
+  assert.equal(queue.length, 5)
+  assert.deepEqual(Array.from(queue, item => item.key), [
+    "which", "status", "locations", "fav", "static"
+  ])
+})
