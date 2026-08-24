@@ -3,7 +3,7 @@
   "id": "io.github.dsumpter.windscribe",
   "name": "Windscribe",
   "version": "1.2.0",
-  "author": "Darius Sumpter",
+  "author": "tuxr",
   "license": "MIT",
   "description": "Windscribe VPN status, locations, protocol, and firewall in the Omarchy bar via windscribe-cli.",
   "kinds": [
