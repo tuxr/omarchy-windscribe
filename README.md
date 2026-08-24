@@ -71,7 +71,7 @@ omarchy-shell shell rescanPlugins
 
 `omarchy plugin validate` must be run against this repository path, not the `~/.config/omarchy/plugins/...` symlink. The validator treats the symlink itself as a forbidden link; the shell still loads symlink installs, and `omarchy plugin remove` knows how to unlink them.
 
-`windscribe-cli` is single-instance. The service serializes every spawn; do not add a second concurrent CLI call.
+`windscribe-cli` is single-instance. The service serializes every spawn through one process; do not add a second concurrent CLI call. At most eight jobs wait behind the running command. Duplicate status/list reads coalesce, queued connection and firewall setters are latest-wins, and accepted rotate/pin operations remain FIFO until the cap rejects new work.
 
 IPC handler changes need `omarchy-restart-shell`. Manifest and QML edits usually hot-reload after `touch manifest.json` or `omarchy-shell shell rescanPlugins`. Follow live logs with:
 
@@ -81,9 +81,18 @@ qs -p "$OMARCHY_PATH/shell" log -f
 
 ## Remove
 
+Removing the plugin unloads and deletes only the Omarchy widget. It does **not** disconnect an active Windscribe tunnel, turn off the Windscribe firewall, log out `windscribe-cli`, or delete Windscribe configuration. Tunnel or firewall state can therefore remain active after the plugin is gone.
+
+If you want to restore normal non-VPN networking before removal, inspect the current state and run the cleanup commands explicitly:
+
 ```sh
+windscribe-cli status
+windscribe-cli disconnect
+windscribe-cli firewall off
 omarchy plugin remove io.github.dsumpter.windscribe
 ```
+
+Run the commands separately so a harmless “already disconnected” result does not prevent the firewall command. If you intentionally want the existing tunnel or firewall state to remain, skip the corresponding cleanup command and remove only the plugin.
 
 ## License
 

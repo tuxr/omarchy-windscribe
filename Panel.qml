@@ -397,11 +397,11 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function refresh(): string { windscribe.refreshAll(); return "ok" }
-    function connectBest(): string { windscribe.connectTo("best"); return "ok" }
-    function disconnect(): string { windscribe.disconnectVpn(); return "ok" }
-    function rotateIp(): string { windscribe.rotateIp(); return "ok" }
-    function pinIp(): string { windscribe.pinIp(); return "ok" }
+    function refresh(): string { return windscribe.refreshAll() }
+    function connectBest(): string { return windscribe.connectTo("best") }
+    function disconnect(): string { return windscribe.disconnectVpn() }
+    function rotateIp(): string { return windscribe.rotateIp() }
+    function pinIp(): string { return windscribe.pinIp() }
     function status(): string {
       return windscribe.connected
         ? ("Connected: " + windscribe.locationName)
@@ -413,6 +413,7 @@ Panel {
         + " state=" + windscribe.connectState
         + " err=" + windscribe.lastError
         + " busy=" + windscribe.busy
+        + " queue=" + windscribe.queuedJobs + "/" + windscribe.maxQueuedJobs
     }
   }
 
